@@ -69,7 +69,7 @@ class MITMerFrame(Frame):
         self.vic_ip_list.grid(row=2, column=1, sticky="WE", padx=5, pady=5)
 
         # DNS Spoofing
-        self.profile_label = Label(self.settings_frame, text="DNS attack profile:\t")
+        self.profile_label = Label(self.settings_frame, text="Attack profile:\t")
         self.profile_label.grid(row=3, column=0, sticky="WE", padx=5, pady=5)
         self.profile_list = Combobox(self.settings_frame, values=self.modes, state="readonly")
         self.profile_list.bind('<<ComboboxSelected>>', self.profile)
@@ -77,7 +77,7 @@ class MITMerFrame(Frame):
         self.profile_list.grid(row=3, column=1, sticky="WE", padx=5, pady=5)
 
         # Custom
-        self.domain_label = Label(self.settings_frame, text="Query regex:\t")
+        self.domain_label = Label(self.settings_frame, text="Query request:\t")
         self.domain_label.grid(row=4, column=0, sticky="WE", padx=5, pady=5)
         self.domain_entry = Entry(self.settings_frame, state="disabled")
         self.domain_entry.grid(row=4, column=1, sticky="WE", padx=5, pady=5)
@@ -89,7 +89,7 @@ class MITMerFrame(Frame):
         self.all_domains.grid(row=5, column=1, sticky="WE", padx=5, pady=5)
 
         # Redirection
-        self.redirect_label = Label(self.settings_frame, text="Redirect to:\t")
+        self.redirect_label = Label(self.settings_frame, text="Query reply:\t")
         self.redirect_label.grid(row=6, column=0, sticky="WE", padx=5, pady=5)
         self.redirect_entry = Entry(self.settings_frame, state="disabled")
         self.redirect_entry.grid(row=6, column=1, sticky="WE", padx=5, pady=5)
