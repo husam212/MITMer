@@ -1,12 +1,10 @@
-from scapy import *
+from scapy.all import *
 from nfqueue import *
 from subprocess import Popen, PIPE, STDOUT
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 from cgi import FieldStorage
-from time import sleep
 from socket import socket, AF_INET, gethostbyname
 from fcntl import ioctl
-from ipaddress import ip_network
 
 conf.verb = 0
 
@@ -24,29 +22,14 @@ def nscan(interface):
               shell=True, stdout=PIPE)
     netid = p.communicate()[0].rstrip()
 
-    # try:
-    #     scanner = PortScanner()
-    #     scanner.scan(hosts=netid, arguments="-sn")
-    #     hosts_list = []
-    #     for host in scanner.all_hosts():
-    #         if "up" in scanner[host]["status"]["state"] and not host in [my_ip, gw_ip]:
-    #             hosts_list.append(host)
-    #     return hosts_list
-    # except:
-    #     return []
+    ans, unans = srp(Ether(dst="ff:ff:ff:ff:ff:ff") /
+                     ARP(pdst=netid), timeout=2, iface=interface, inter=0.1)
 
-    procs = []
-    active_hosts = []
-    all_hosts = list(ip_network(unicode(netid)).hosts())
-    for host in all_hosts:
-        procs.append((host, Popen("ping %s -c 1" % host, shell=True, stdout=PIPE)))
-
-    for (host, proc) in procs:
-        if proc.poll() is not None:
-            if proc.returncode == 0 and str(host) not in [gw_ip, my_ip]:
-                active_hosts.append(str(host))
-    sleep(.05)
-    return active_hosts
+    hosts = []
+    for snd, rcv in ans:
+        if rcv.psrc not in [gw_ip, my_ip]:
+            hosts.append(rcv.psrc)
+    return hosts
 
 
 def get_ip(interface):
@@ -248,7 +231,7 @@ class WebServer(object):
         self.conn = conn
 
     def handler(self, *args):
-            HTTPHandler(self.service, self.conn, *args)
+        HTTPHandler(self.service, self.conn, *args)
 
     def start(self):
         server = HTTPServer(('', self.port), self.handler)
