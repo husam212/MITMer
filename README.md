@@ -3,7 +3,6 @@ MITMer
 
 MITMer is a man-in-the-middle and phishing attack tool that steals the victim's credentials of some web services like Facebook.
 
-****
 
 **Dependencies:**
 
@@ -11,7 +10,6 @@ MITMer is a man-in-the-middle and phishing attack tool that steals the victim's 
 * scapy
 * python2-nfqueue
 
-****
 
 **How to:**
 
