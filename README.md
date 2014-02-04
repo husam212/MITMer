@@ -15,7 +15,7 @@ MITMer is a man-in-the-middle and phishing attack tool that steals the victim's 
 
 * Run it as root.
 
-    sudo python2 mitmer.py
+        sudo python2 mitmer.py
 
 * Select a network interface.
 
