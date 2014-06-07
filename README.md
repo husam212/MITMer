@@ -8,11 +8,9 @@ MITMer
 
 - Show HTTP and DNS activity of attacked hosts.
 
-- Fake DNS queries asking about some website and redirects them to your PC.
+- Drop DNS queries asking about a website and redirects them to your PC.
 
-- Covert that website into a fake page and host it on your PC.
-
-- Reveal entered credentials into that fake page.
+- Convert that website into a fake page and host it on your PC.
 
 
 **Dependencies:**
@@ -21,7 +19,7 @@ MITMer
 
 - scapy
 
-- python2-nfqueeu
+- python2-nfqueue
 
 
 **Examples:**
