@@ -319,7 +319,7 @@ class NScan(Process):
 
     def run(self):
 
-        p = Popen("ip route | grep -m1 -E '%s.*link.*src%s' | awk '{print $1}'" %
+        p = Popen("ip route | grep -m1 -E '%s.*link.*src %s' | awk '{print $1}'" %
                   (self.iface, self.iface_ip), shell=True, stdout=PIPE)
         netid = p.communicate()[0].rstrip()
 
