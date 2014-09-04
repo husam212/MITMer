@@ -30,7 +30,7 @@ MITMer
 
 - Attack 192.168.1.111 and show its DNS traffic, create fake pages for website1.com & website2.com:
 
-        sudo ./mitmer.py -dns -dnames "website1.com website2.com"
+        sudo ./mitmer.py -ip 192.168.1.111 -dns -dnames "website1.com website2.com"
 
 - To show help:
 
